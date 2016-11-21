@@ -139,6 +139,12 @@ options:
          security group IDs. You must provide at least one security group ID.
     required: false
     aliases: ['security_group_ids']
+  env_variables:
+    description:
+      -  If your Lambda function uses Environment variables, you provide this parameter identifying a list of
+         variable/value pairs. Both C(var) and C(value) are required for each entry.
+    required: false
+    aliases: ['environment_variables', 'environment_vars']
 requirements:
     - boto3
 extends_documentation_fragment:
@@ -181,6 +187,9 @@ EXAMPLES = '''
         - subnet-99910cc3
       vpc_security_group_ids:
         - sg-999b9ca8
+      env_variables:
+        - var: Some_Variables
+          value: Some_Value
   - name: show results
     debug: var=lambda_facts
 '''
