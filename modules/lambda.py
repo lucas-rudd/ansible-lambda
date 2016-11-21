@@ -457,7 +457,15 @@ def lambda_function(module, aws):
                     vpc_changed = True
                     break
 
-            if config_changed or vpc_changed:
+            # check if Environment config has changed
+            env_changed = False
+            env_dict = dict()
+            for var in module.params.get('env_variables', []):
+                env_dict[var['var']] = var['value']
+            if cmp(env_dict, facts.get('Environment', {}).get('Variables', {})) != 0:
+                env_changed = True
+
+            if config_changed or vpc_changed or env_changed:
                 api_params = set_api_params(module, ('function_name', ))
                 api_params.update(set_api_params(module, config_params))
 
@@ -466,6 +474,11 @@ def lambda_function(module, aws):
                 else:
                     # to remove the VPC config, its parameters must be explicitly set to empty lists
                     api_params.update(VpcConfig=dict(SubnetIds=[], SecurityGroupIds=[]))
+
+                if module.params.get('env_variables'):
+                    api_params.update(Environment=set_environment_params(module))
+                else:
+                    api_params.update(Environment=dict(Variables=dict()))
 
                 try:
                     if not module.check_mode:
