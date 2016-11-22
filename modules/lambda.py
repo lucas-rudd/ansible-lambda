@@ -139,6 +139,12 @@ options:
          security group IDs. You must provide at least one security group ID.
     required: false
     aliases: ['security_group_ids']
+  env_variables:
+    description:
+      -  If your Lambda function uses Environment variables, you provide this parameter identifying a list of
+         variable/value pairs. Both C(var) and C(value) are required for each entry.
+    required: false
+    aliases: ['environment_variables', 'environment_vars']
 requirements:
     - boto3
 extends_documentation_fragment:
@@ -181,6 +187,9 @@ EXAMPLES = '''
         - subnet-99910cc3
       vpc_security_group_ids:
         - sg-999b9ca8
+      env_variables:
+        - var: Some_Variables
+          value: Some_Value
   - name: show results
     debug: var=lambda_facts
 '''
@@ -248,6 +257,20 @@ def pc(key):
 
     return "".join([token.capitalize() for token in key.split('_')])
 
+def set_environment_params(module):
+    """
+    Sets parameters for Environment to those expected by the boto3 API.
+
+    :param module:
+    :return:
+    """
+
+    api_params = dict(Variables=dict())
+
+    for var in module.params.get('env_variables', []):
+        api_params['Variables'][var['var']] = var['value']
+
+    return api_params
 
 def set_api_params(module, module_params):
     """
@@ -443,7 +466,15 @@ def lambda_function(module, aws):
                     vpc_changed = True
                     break
 
-            if config_changed or vpc_changed:
+            # check if Environment config has changed
+            env_changed = False
+            env_dict = dict()
+            for var in module.params.get('env_variables', []):
+                env_dict[var['var']] = var['value']
+            if cmp(env_dict, facts.get('Environment', {}).get('Variables', {})) != 0:
+                env_changed = True
+
+            if config_changed or vpc_changed or env_changed:
                 api_params = set_api_params(module, ('function_name', ))
                 api_params.update(set_api_params(module, config_params))
 
@@ -452,6 +483,11 @@ def lambda_function(module, aws):
                 else:
                     # to remove the VPC config, its parameters must be explicitly set to empty lists
                     api_params.update(VpcConfig=dict(SubnetIds=[], SecurityGroupIds=[]))
+
+                if module.params.get('env_variables'):
+                    api_params.update(Environment=set_environment_params(module))
+                else:
+                    api_params.update(Environment=dict(Variables=dict()))
 
                 try:
                     if not module.check_mode:
@@ -479,6 +515,7 @@ def lambda_function(module, aws):
             api_params.update(set_api_params(module, ('memory_size', 'timeout', 'description', 'publish')))
             api_params.update(Code=set_api_params(module, ('s3_bucket', 's3_key', 's3_object_version')))
             api_params.update(VpcConfig=set_api_params(module, ('subnet_ids', 'security_group_ids')))
+            api_params.update(Environment=set_environment_params(module))
 
             try:
                 if not module.check_mode:
@@ -531,6 +568,14 @@ def main():
             description=dict(required=False, default=None),
             publish=dict(type='bool', required=False, default=False),
             version=dict(type='int', required=False, default=0),
+            env_variables=dict(
+                type='list',
+                required=False,
+                default=[],
+                var=dict(required=True),
+                value=dict(required=True),
+                aliases=['environment_variables', 'environment_vars']
+            ),
         )
     )
 
