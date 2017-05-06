@@ -376,8 +376,12 @@ def main():
             module.fail_json(
                 msg='Function name {0} is invalid. Names must contain only alphanumeric characters and hyphens.'.format(function_name)
             )
-        if len(function_name) > 64:
-            module.fail_json(msg='Function name "{0}" exceeds 64 character limit'.format(function_name))
+        if ':' in function_name:
+            if len(function_name) > 140:
+                module.fail_json(msg='Function ARN "{0}" exceeds 140 character limit'.format(function_name))
+        else:
+            if len(function_name) > 64:
+                module.fail_json(msg='Function name "{0}" exceeds 64 character limit'.format(function_name))
 
     try:
         region, endpoint, aws_connect_kwargs = get_aws_connection_info(module, boto3=True)
