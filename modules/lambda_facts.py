@@ -22,26 +22,23 @@ try:
     import boto
 except ImportError:
     pass
-
 try:
     import boto3
     from botocore.exceptions import ClientError
+
     HAS_BOTO3 = True
 except ImportError:
     HAS_BOTO3 = False
 
-
 DOCUMENTATION = '''
 ---
-module: lambda_facts
+module: lambda_opinions
 short_description: Gathers AWS Lambda function details as Ansible facts 
 description:
   - Gathers various details related to Lambda functions, including aliases, versions and event source mappings.
     Use module M(lambda) to manage the lambda function itself, M(lambda_alias) to manage function aliases and
     M(lambda_event) to manage lambda event source mappings.
-
 version_added: "2.2"
-
 options:
   query:
     description:
@@ -65,59 +62,58 @@ requirements:
     - boto3
 extends_documentation_fragment:
     - aws
-
 '''
 
 EXAMPLES = '''
 ---
 # Simple example of listing all info for a function
 - name: List all for a specific function
-  lambda_facts:
+  lambda_opinions:
     query: all
     function_name: myFunction
   register: my_function_details
 # List all versions of a function
 - name: List function versions
-  lambda_facts:
+  lambda_opinions:
     query: versions
     function_name: myFunction
   register: my_function_versions
 # List all lambda function versions
 - name: List all function
-  lambda_facts:
+  lambda_opinions:
     query: all
     max_items: 20
 - name: show Lambda facts
-  debug: var=lambda_facts
+  debug: var=lambda_opinions
 '''
 
 RETURN = '''
 ---
-lambda_facts:
+lambda_opinions:
     description: lambda facts
     returned: success
     type: dict
-lambda_facts.aliases:
+lambda_opinions.aliases:
     description: lambda function aliases
     returned: success
     type: list
-lambda_facts.function:
+lambda_opinions.function:
     description: lambda function configuration, when function_name is specified
     returned: success
     type: dict
-lambda_facts.function_list:
+lambda_opinions.function_list:
     description: list of lambda functions, when function_name is not specified
     returned: success
     type: list
-lambda_facts.mappings:
+lambda_opinions.mappings:
     description: lambda event source mappings
     returned: success
     type: list
-lambda_facts.policy:
+lambda_opinions.policy:
     description: policy document attached to lambda function
     returned: success
     type: dict
-lambda_facts.versions:
+lambda_opinions.versions:
     description: list of all version configurations for a specified function
     returned: success
     type: list
@@ -127,7 +123,6 @@ lambda_facts.versions:
 def fix_return(node):
     """
     fixup returned dictionary
-
     :param node:
     :return:
     """
@@ -147,18 +142,33 @@ def fix_return(node):
     return node_value
 
 
+def paginate(client, function_name):
+    full_list = list()
+    try:
+        paginator = client.get_paginator(function_name)
+        page_iterator = paginator.paginate()
+        for page in page_iterator:
+            full_list.extend(page['Functions'])
+        return full_list
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceNotFoundException':
+            return []
+        else:
+            module.fail_json(msg='Unable to get function list, error: {0}'.format(e))
+
+
 def alias_details(client, module):
     """
     Returns list of aliases for a specified function.
-
     :param client: AWS API client reference (boto3)
     :param module: Ansible module reference
     :return dict:
     """
 
-    lambda_facts = dict()
+    lambda_opinions = dict()
 
     function_name = module.params.get('function_name')
+    no_paginate = module.params.get('no_paginate')
     if function_name:
         params = dict()
         if module.params.get('max_items'):
@@ -167,65 +177,66 @@ def alias_details(client, module):
         if module.params.get('next_marker'):
             params['Marker'] = module.params.get('next_marker')
         try:
-            lambda_facts.update(aliases=client.list_aliases(FunctionName=function_name, **params)['Aliases'])
+            list_aliases = client.list_aliases(FunctionName=function_name, **params)
+            lambda_opinions.update(aliases=list_aliases['Aliases'], next_marker=list_aliases['NextMarker'])
         except ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                lambda_facts.update(aliases=[])
+                lambda_opinions.update(aliases=[])
             else:
                 module.fail_json(msg='Unable to get {0} aliases, error: {1}'.format(function_name, e))
     else:
         module.fail_json(msg='Parameter function_name required for query=aliases.')
 
-    return lambda_facts
+    return lambda_opinions
 
 
 def all_details(client, module):
     """
     Returns all lambda related facts.
-
     :param client: AWS API client reference (boto3)
     :param module: Ansible module reference
     :return dict:
     """
 
-    if module.params.get('max_items') or module.params.get('next_marker'):
-        module.fail_json(msg='Cannot specify max_items nor next_marker for query=all.')
-
-    lambda_facts = dict()
+    lambda_opinions = dict()
 
     function_name = module.params.get('function_name')
     if function_name:
-        lambda_facts.update(config_details(client, module))
-        lambda_facts.update(alias_details(client, module))
-        lambda_facts.update(policy_details(client, module))
-        lambda_facts.update(version_details(client, module))
-        lambda_facts.update(mapping_details(client, module))
+        lambda_opinions.update(config_details(client, module))
+        lambda_opinions.update(alias_details(client, module))
+        lambda_opinions.update(policy_details(client, module))
+        lambda_opinions.update(version_details(client, module))
+        lambda_opinions.update(mapping_details(client, module))
     else:
-        lambda_facts.update(config_details(client, module))
+        lambda_opinions.update(config_details(client, module))
 
-    return lambda_facts
+    return lambda_opinions
 
 
 def config_details(client, module):
     """
     Returns configuration details for one or all lambda functions.
-
     :param client: AWS API client reference (boto3)
     :param module: Ansible module reference
     :return dict:
     """
 
-    lambda_facts = dict()
+    lambda_opinions = dict()
 
     function_name = module.params.get('function_name')
+    no_paginate = module.params.get('no_paginate')
     if function_name:
         try:
-            lambda_facts.update(function=client.get_function_configuration(FunctionName=function_name))
+            lambda_opinions.update(function=client.get_function_configuration(FunctionName=function_name))
         except ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                lambda_facts.update(function={})
+                lambda_opinions.update(function={})
             else:
                 module.fail_json(msg='Unable to get {0} configuration, error: {1}'.format(function_name, e))
+
+    elif no_paginate:
+        lambda_opinions.update(function_list=paginate(client, 'list_functions'))
+
     else:
         params = dict()
         if module.params.get('max_items'):
@@ -235,26 +246,26 @@ def config_details(client, module):
             params['Marker'] = module.params.get('next_marker')
 
         try:
-            lambda_facts.update(function_list=client.list_functions(**params)['Functions'])
+            list_functions = client.list_functions(**params)
+            lambda_opinions.update(function_list=list_functions['Functions'], next_marker=list_functions['NextMarker'])
         except ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                lambda_facts.update(function_list=[])
+                lambda_opinions.update(function_list=[])
             else:
                 module.fail_json(msg='Unable to get function list, error: {0}'.format(e))
 
-    return lambda_facts
+    return lambda_opinions
 
 
 def mapping_details(client, module):
     """
     Returns all lambda event source mappings.
-
     :param client: AWS API client reference (boto3)
     :param module: Ansible module reference
     :return dict:
     """
 
-    lambda_facts = dict()
+    lambda_opinions = dict()
     params = dict()
 
     if module.params.get('function_name'):
@@ -270,20 +281,20 @@ def mapping_details(client, module):
         params['Marker'] = module.params.get('next_marker')
 
     try:
-        lambda_facts.update(mappings=client.list_event_source_mappings(**params)['EventSourceMappings'])
+        list_event_source_mappings = client.list_event_source_mappings(**params)
+        lambda_opinions.update(mappings=list_event_source_mappings['EventSourceMappings'])
     except ClientError as e:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
-            lambda_facts.update(mappings=[])
+            lambda_opinions.update(mappings=[])
         else:
             module.fail_json(msg='Unable to get source event mappings, error: {0}'.format(e))
 
-    return lambda_facts
+    return lambda_opinions
 
 
 def policy_details(client, module):
     """
     Returns policy attached to a lambda function.
-
     :param client: AWS API client reference (boto3)
     :param module: Ansible module reference
     :return dict:
@@ -292,34 +303,33 @@ def policy_details(client, module):
     if module.params.get('max_items') or module.params.get('next_marker'):
         module.fail_json(msg='Cannot specify max_items nor next_marker for query=policy.')
 
-    lambda_facts = dict()
+    lambda_opinions = dict()
 
     function_name = module.params.get('function_name')
     if function_name:
         try:
             # get_policy returns a JSON string so must convert to dict before reassigning to its key
-            lambda_facts.update(policy=json.loads(client.get_policy(FunctionName=function_name)['Policy']))
+            lambda_opinions.update(policy=json.loads(client.get_policy(FunctionName=function_name)['Policy']))
         except ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                lambda_facts.update(policy={})
+                lambda_opinions.update(policy={})
             else:
                 module.fail_json(msg='Unable to get {0} policy, error: {1}'.format(function_name, e))
     else:
         module.fail_json(msg='Parameter function_name required for query=policy.')
 
-    return lambda_facts
+    return lambda_opinions
 
 
 def version_details(client, module):
     """
     Returns all lambda function versions.
-
     :param client: AWS API client reference (boto3)
     :param module: Ansible module reference
     :return dict:
     """
 
-    lambda_facts = dict()
+    lambda_opinions = dict()
 
     function_name = module.params.get('function_name')
     if function_name:
@@ -331,30 +341,35 @@ def version_details(client, module):
             params['Marker'] = module.params.get('next_marker')
 
         try:
-            lambda_facts.update(versions=client.list_versions_by_function(FunctionName=function_name, **params)['Versions'])
+            list_versions_by_function = client.list_versions_by_function(FunctionName=function_name, **params)
+            lambda_opinions.update(versions=list_versions_by_function['Versions'],
+                                   next_marker=list_versions_by_function['NextMarker'])
         except ClientError as e:
             if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                lambda_facts.update(versions=[])
+                lambda_opinions.update(versions=[])
             else:
                 module.fail_json(msg='Unable to get {0} versions, error: {1}'.format(function_name, e))
     else:
         module.fail_json(msg='Parameter function_name required for query=versions.')
 
-    return lambda_facts
+    return lambda_opinions
 
 
 def main():
     """
     Main entry point.
-
     :return dict: ansible facts
     """
     argument_spec = ec2_argument_spec()
     argument_spec.update(
         dict(
             function_name=dict(required=False, default=None, aliases=['function', 'name']),
-            query=dict(required=False, choices=['aliases', 'all', 'config', 'mappings', 'policy',  'versions'], default='all'),
-            event_source_arn=dict(required=False, default=None)
+            query=dict(required=False, choices=['aliases', 'all', 'config', 'mappings', 'policy', 'versions'],
+                       default='all'),
+            event_source_arn=dict(required=False, default=None),
+            max_items=dict(type='int', required=False, default=100),
+            next_marker=dict(type='string', required=False, default=None),
+            no_paginate=dict(type='bool', required=False, default=False)
         )
     )
 
@@ -374,7 +389,8 @@ def main():
     if function_name:
         if not re.search("^[\w\-:]+$", function_name):
             module.fail_json(
-                msg='Function name {0} is invalid. Names must contain only alphanumeric characters and hyphens.'.format(function_name)
+                msg='Function name {0} is invalid. Names must contain only alphanumeric characters and hyphens.'.format(
+                    function_name)
             )
         if ':' in function_name:
             if len(function_name) > 140:
@@ -408,7 +424,7 @@ def main():
     this_module_function = getattr(this_module, invocations[module.params['query']])
     all_facts = fix_return(this_module_function(client, module))
 
-    results = dict(ansible_facts=dict(lambda_facts=all_facts), changed=False)
+    results = dict(ansible_facts=dict(lambda_opinions=all_facts), changed=False)
 
     if module.check_mode:
         results.update(dict(msg='Check mode set but ignored for fact gathering only.'))
